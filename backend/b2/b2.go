@@ -26,6 +26,7 @@ import (
 	"github.com/rclone/rclone/fs/accounting"
 	"github.com/rclone/rclone/fs/config/configmap"
 	"github.com/rclone/rclone/fs/config/configstruct"
+	"github.com/rclone/rclone/fs/encodings"
 	"github.com/rclone/rclone/fs/fserrors"
 	"github.com/rclone/rclone/fs/fshttp"
 	"github.com/rclone/rclone/fs/hash"
@@ -33,6 +34,8 @@ import (
 	"github.com/rclone/rclone/lib/pacer"
 	"github.com/rclone/rclone/lib/rest"
 )
+
+const enc = encodings.B2
 
 const (
 	defaultEndpoint     = "https://api.backblazeb2.com"
@@ -391,7 +394,7 @@ func NewFs(name, root string, m configmap.Mapper) (fs.Fs, error) {
 	}
 	// If this is a key limited to a single bucket, it must exist already
 	if f.bucket != "" && f.info.Allowed.BucketID != "" {
-		allowedBucket := f.info.Allowed.BucketName
+		allowedBucket := enc.ToStandardName(f.info.Allowed.BucketName)
 		if allowedBucket == "" {
 			return nil, errors.New("bucket that application key is restricted to no longer exists")
 		}
@@ -606,12 +609,12 @@ func (f *Fs) list(ctx context.Context, dir string, recurse bool, prefix string, 
 	var request = api.ListFileNamesRequest{
 		BucketID:     bucketID,
 		MaxFileCount: chunkSize,
-		Prefix:       root,
+		Prefix:       enc.FromStandardPath(root),
 		Delimiter:    delimiter,
 	}
 	prefix = root + prefix
 	if prefix != "" {
-		request.StartFileName = prefix
+		request.StartFileName = enc.FromStandardPath(prefix)
 	}
 	opts := rest.Opts{
 		Method: "POST",
@@ -631,6 +634,7 @@ func (f *Fs) list(ctx context.Context, dir string, recurse bool, prefix string, 
 		}
 		for i := range response.Files {
 			file := &response.Files[i]
+			file.Name = enc.ToStandardPath(file.Name)
 			// Finish if file name no longer has prefix
 			if prefix != "" && !strings.HasPrefix(file.Name, prefix) {
 				return nil
@@ -810,7 +814,9 @@ func (f *Fs) listBucketsToFn(fn listBucketFn) error {
 		return err
 	}
 	for i := range response.Buckets {
-		err = fn(&response.Buckets[i])
+		bucket := &response.Buckets[i]
+		bucket.Name = enc.ToStandardName(bucket.Name)
+		err = fn(bucket)
 		if err != nil {
 			return err
 		}
@@ -921,7 +927,7 @@ func (f *Fs) Mkdir(ctx context.Context, dir string) error {
 	}
 	var request = api.CreateBucketRequest{
 		AccountID: f.info.AccountID,
-		Name:      f.bucket,
+		Name:      enc.FromStandardName(f.bucket),
 		Type:      "allPrivate",
 	}
 	var response api.Bucket
@@ -1006,7 +1012,7 @@ func (f *Fs) hide(Name string) error {
 	}
 	var request = api.HideFileRequest{
 		BucketID: bucketID,
-		Name:     Name,
+		Name:     enc.FromStandardPath(Name),
 	}
 	var response api.File
 	err = f.pacer.Call(func() (bool, error) {
@@ -1034,7 +1040,7 @@ func (f *Fs) deleteByID(ID, Name string) error {
 	}
 	var request = api.DeleteFileRequest{
 		ID:   ID,
-		Name: Name,
+		Name: enc.FromStandardPath(Name),
 	}
 	var response api.File
 	err := f.pacer.Call(func() (bool, error) {
@@ -1167,7 +1173,7 @@ func (f *Fs) Copy(ctx context.Context, src fs.Object, remote string) (fs.Object,
 	}
 	var request = api.CopyFileRequest{
 		SourceID:          srcObj.id,
-		Name:              f.root + remote,
+		Name:              enc.FromStandardPath(f.root + remote),
 		MetadataDirective: "COPY",
 		DestBucketID:      destBucketID,
 	}
@@ -1215,7 +1221,7 @@ func (f *Fs) getDownloadAuthorization(remote string) (authorization string, err 
 	}
 	var request = api.GetDownloadAuthorizationRequest{
 		BucketID:               bucketID,
-		FileNamePrefix:         path.Join(f.root, remote),
+		FileNamePrefix:         enc.FromStandardPath(path.Join(f.root, remote)),
 		ValidDurationInSeconds: validDurationInSeconds,
 	}
 	var response api.GetDownloadAuthorizationResponse
@@ -1448,7 +1454,7 @@ func (o *Object) SetModTime(ctx context.Context, modTime time.Time) error {
 	}
 	var request = api.CopyFileRequest{
 		SourceID:          o.id,
-		Name:              o.fs.root + o.remote, // copy to same name
+		Name:              enc.FromStandardPath(o.fs.root + o.remote), // copy to same name
 		MetadataDirective: "REPLACE",
 		ContentType:       info.ContentType,
 		Info:              info.Info,
@@ -1549,7 +1555,7 @@ func (o *Object) Open(ctx context.Context, options ...fs.OpenOption) (in io.Read
 	if o.id != "" {
 		opts.Path += "/b2api/v1/b2_download_file_by_id?fileId=" + urlEncode(o.id)
 	} else {
-		opts.Path += "/file/" + urlEncode(o.fs.bucket) + "/" + urlEncode(o.fs.root+o.remote)
+		opts.Path += "/file/" + urlEncode(enc.FromStandardName(o.fs.bucket)) + "/" + urlEncode(enc.FromStandardPath(o.fs.root+o.remote))
 	}
 	var resp *http.Response
 	err = o.fs.pacer.Call(func() (bool, error) {
@@ -1745,7 +1751,7 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 		Body:    in,
 		ExtraHeaders: map[string]string{
 			"Authorization":  upload.AuthorizationToken,
-			"X-Bz-File-Name": urlEncode(o.fs.root + o.remote),
+			"X-Bz-File-Name": urlEncode(enc.FromStandardPath(o.fs.root + o.remote)),
 			"Content-Type":   fs.MimeType(ctx, src),
 			sha1Header:       calculatedSha1,
 			timeHeader:       timeString(modTime),
