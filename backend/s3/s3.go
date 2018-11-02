@@ -43,6 +43,7 @@ import (
 	"github.com/rclone/rclone/fs"
 	"github.com/rclone/rclone/fs/config/configmap"
 	"github.com/rclone/rclone/fs/config/configstruct"
+	"github.com/rclone/rclone/fs/encodings"
 	"github.com/rclone/rclone/fs/fserrors"
 	"github.com/rclone/rclone/fs/fshttp"
 	"github.com/rclone/rclone/fs/hash"
@@ -50,6 +51,8 @@ import (
 	"github.com/rclone/rclone/lib/pacer"
 	"github.com/rclone/rclone/lib/rest"
 )
+
+const enc = encodings.S3
 
 // Register with Fs
 func init() {
@@ -1088,9 +1091,10 @@ func NewFs(name, root string, m configmap.Mapper) (fs.Fs, error) {
 	if f.root != "" {
 		f.root += "/"
 		// Check to see if the object exists
+		encodedDirectory := enc.FromStandardPath(directory)
 		req := s3.HeadObjectInput{
 			Bucket: &f.bucket,
-			Key:    &directory,
+			Key:    &encodedDirectory,
 		}
 		err = f.pacer.Call(func() (bool, error) {
 			_, err = f.c.HeadObject(&req)
@@ -1208,12 +1212,13 @@ func (f *Fs) list(ctx context.Context, dir string, recurse bool, fn listFn) erro
 		delimiter = "/"
 	}
 	var marker *string
+	encodedRoot := enc.FromStandardPath(root)
 	for {
 		// FIXME need to implement ALL loop
 		req := s3.ListObjectsInput{
 			Bucket:       &f.bucket,
 			Delimiter:    &delimiter,
-			Prefix:       &root,
+			Prefix:       &encodedRoot,
 			MaxKeys:      &maxKeys,
 			Marker:       marker,
 			EncodingType: aws.String(s3.EncodingTypeUrl),
@@ -1245,6 +1250,7 @@ func (f *Fs) list(ctx context.Context, dir string, recurse bool, fn listFn) erro
 					fs.Logf(f, "failed to URL decode %q in listing common prefix: %v", *commonPrefix.Prefix, err)
 					continue
 				}
+				remote = enc.ToStandardPath(remote)
 				if !strings.HasPrefix(remote, f.root) {
 					fs.Logf(f, "Odd name received %q", remote)
 					continue
@@ -1266,6 +1272,7 @@ func (f *Fs) list(ctx context.Context, dir string, recurse bool, fn listFn) erro
 				fs.Logf(f, "failed to URL decode %q in listing: %v", aws.StringValue(object.Key), err)
 				continue
 			}
+			key = enc.ToStandardPath(key)
 			if !strings.HasPrefix(key, f.root) {
 				fs.Logf(f, "Odd name received %q", key)
 				continue
@@ -1559,13 +1566,13 @@ func (f *Fs) Copy(ctx context.Context, src fs.Object, remote string) (fs.Object,
 		return nil, fs.ErrorCantCopy
 	}
 	srcFs := srcObj.fs
-	key := f.root + remote
-	source := pathEscape(srcFs.bucket + "/" + srcFs.root + srcObj.remote)
+	key := enc.FromStandardPath(f.root + remote)
+	encodedSource := pathEscape(srcFs.bucket + "/" + enc.FromStandardPath(srcObj.encodedKey()))
 	req := s3.CopyObjectInput{
 		Bucket:            &f.bucket,
 		ACL:               &f.opt.ACL,
 		Key:               &key,
-		CopySource:        &source,
+		CopySource:        &encodedSource,
 		MetadataDirective: aws.String(s3.MetadataDirectiveCopy),
 	}
 	if f.opt.ServerSideEncryption != "" {
@@ -1645,6 +1652,11 @@ func (o *Object) Size() int64 {
 	return o.bytes
 }
 
+// encodedKey returns an encoded key for this object
+func (o *Object) encodedKey() string {
+	return enc.FromStandardPath(o.fs.root + o.remote)
+}
+
 // readMetaData gets the metadata if it hasn't already been fetched
 //
 // it also sets the info
@@ -1652,7 +1664,7 @@ func (o *Object) readMetaData(ctx context.Context) (err error) {
 	if o.meta != nil {
 		return nil
 	}
-	key := o.fs.root + o.remote
+	key := o.encodedKey()
 	req := s3.HeadObjectInput{
 		Bucket: &o.fs.bucket,
 		Key:    &key,
@@ -1734,7 +1746,7 @@ func (o *Object) SetModTime(ctx context.Context, modTime time.Time) error {
 	mimeType := fs.MimeType(ctx, o)
 
 	// Copy the object to itself to update the metadata
-	key := o.fs.root + o.remote
+	key := o.encodedKey()
 	sourceKey := o.fs.bucket + "/" + key
 	directive := s3.MetadataDirectiveReplace // replace metadata with that passed in
 	req := s3.CopyObjectInput{
@@ -1772,7 +1784,7 @@ func (o *Object) Storable() bool {
 
 // Open an object for read
 func (o *Object) Open(ctx context.Context, options ...fs.OpenOption) (in io.ReadCloser, err error) {
-	key := o.fs.root + o.remote
+	key := o.encodedKey()
 	req := s3.GetObjectInput{
 		Bucket: &o.fs.bucket,
 		Key:    &key,
@@ -1862,7 +1874,7 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 	// Guess the content type
 	mimeType := fs.MimeType(ctx, src)
 
-	key := o.fs.root + o.remote
+	key := o.encodedKey()
 	if multipart {
 		req := s3manager.UploadInput{
 			Bucket:      &o.fs.bucket,
@@ -1966,7 +1978,7 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 
 // Remove an object
 func (o *Object) Remove(ctx context.Context) error {
-	key := o.fs.root + o.remote
+	key := o.encodedKey()
 	req := s3.DeleteObjectInput{
 		Bucket: &o.fs.bucket,
 		Key:    &key,
