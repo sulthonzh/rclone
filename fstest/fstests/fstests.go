@@ -1674,7 +1674,9 @@ func Run(t *testing.T, opt *Opt) {
 
 		// Purge the folder
 		err = operations.Purge(ctx, remote, "")
-		require.NoError(t, err)
+		if errors.Cause(err) != fs.ErrorDirNotFound {
+			require.NoError(t, err)
+		}
 		purged = true
 		fstest.CheckListing(t, remote, []fstest.Item{})
 
