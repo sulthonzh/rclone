@@ -18,10 +18,10 @@ func GetFn(fsString string, create func(fsString string) (fs.Fs, error)) (f fs.F
 		ok = err == nil || err == fs.ErrorIsFile
 		return f, ok, err
 	})
-	if err != nil {
+	if err != nil && err != fs.ErrorIsFile {
 		return nil, err
 	}
-	return value.(fs.Fs), nil
+	return value.(fs.Fs), err
 }
 
 // Get gets a fs.Fs named fsString either from the cache or creates it afresh
