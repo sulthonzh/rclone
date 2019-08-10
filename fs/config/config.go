@@ -1078,14 +1078,14 @@ func editOptions(ri *fs.RegInfo, name string, isNew bool) {
 			}
 			subProvider := getConfigData().MustValue(name, fs.ConfigProvider, "")
 			if matchProvider(option.Provider, subProvider) {
-				if !isNew {
-					fmt.Printf("Value %q = %q\n", option.Name, FileGet(name, option.Name))
-					fmt.Printf("Edit? (y/n)>\n")
-					if !Confirm() {
-						continue
-					}
-				}
 				if option.Hide&fs.OptionHideConfigurator == 0 {
+					if !isNew {
+						fmt.Printf("Value %q = %q\n", option.Name, FileGet(name, option.Name))
+						fmt.Printf("Edit? (y/n)>\n")
+						if !Confirm() {
+							continue
+						}
+					}
 					FileSet(name, option.Name, ChooseOption(&option, name))
 				}
 			}
