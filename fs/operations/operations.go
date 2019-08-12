@@ -310,7 +310,10 @@ func Copy(ctx context.Context, f fs.Fs, dst fs.Object, remote string, src fs.Obj
 		}
 		// If can't server side copy, do it manually
 		if err == fs.ErrorCantCopy {
-			if doOpenWriterAt := f.Features().OpenWriterAt; doOpenWriterAt != nil && src.Size() >= int64(fs.Config.MultiThreadCutoff) && fs.Config.MultiThreadStreams > 1 {
+			// Disable multithread if --multi-thread-streams not in use and source is local
+			disableMultiThread := !fs.Config.MultiThreadSet && src.Fs().Features().OpenWriterAt != nil
+			doOpenWriterAt := f.Features().OpenWriterAt
+			if !disableMultiThread && doOpenWriterAt != nil && src.Size() >= int64(fs.Config.MultiThreadCutoff) && fs.Config.MultiThreadStreams > 1 {
 				// Number of streams proportional to size
 				streams := src.Size() / int64(fs.Config.MultiThreadCutoff)
 				// With maximum
